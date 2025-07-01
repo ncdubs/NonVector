@@ -1,13 +1,14 @@
+# NonVector: Smart SKU Matching (Structured + Text)
 import streamlit as st
 import pandas as pd
 import re
 from io import BytesIO
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
-st.title("Bulk SKU Similarity Finder (TF-IDF Cosine)")
+st.title("Bulk SKU Similarity Finder (Structured + Text)")
 
-# STEP 1: Paste or upload list of SKUs
 st.header("Step 1: Enter Competitor SKUs")
 uploaded_file = st.file_uploader("Upload Excel file with SKUs", type=["xlsx", "xls"])
 pasted_data = st.text_area("Paste competitor SKU data here:")
@@ -56,7 +57,6 @@ if skus:
     excel_data = to_excel(pd.DataFrame({'SKU': skus}))
     st.download_button("Download SKUs to Excel", data=excel_data, file_name="sku_output.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# STEP 2: Upload catalog (memory-efficient, multi-sheet)
 st.header("Step 2: Upload Appliance Catalog (Tall Format, Multiple Sheets OK)")
 appliance_file = st.file_uploader(
     "Upload catalog Excel (tall, features as columns, multiple sheets allowed)", 
@@ -66,20 +66,71 @@ appliance_file = st.file_uploader(
 if not appliance_file:
     st.stop()
 
-# Read all sheets but do not concatenate
 all_sheets = pd.read_excel(appliance_file, sheet_name=None)
 sheet_lookup = {}
 required = ['SKU', 'Brand', 'Model Status', 'Configuration']
+
+def extract_width(description):
+    if pd.isnull(description):
+        return np.nan
+    match = re.search(r'(\d{2,3})(\s?("|in|inches|inch|-in|-IN|-inch|-INCH|\'\'))', str(description))
+    if match:
+        return float(match.group(1))
+    return np.nan
+
+def extract_capacity(description):
+    if pd.isnull(description):
+        return np.nan
+    # Matches: 1.1', 1.1 cu ft, 1.1 cu. ft., etc. (as cubic feet)
+    match = re.search(r'(\d+(?:\.\d+)?)(\s*cu\.?\s*ft|\'(?!\'))', str(description).lower())
+    if match:
+        return float(match.group(1))
+    return np.nan
+
+discard_cols = ['SKU', 'Brand', 'Model Status', 'combined_specs']
 for name, df_sheet in all_sheets.items():
     df_sheet.columns = [str(c).strip() for c in df_sheet.columns]
+    if 'Description' in df_sheet.columns:
+        df_sheet['ExtractedWidth'] = df_sheet['Description'].apply(extract_width)
+        df_sheet['ExtractedCapacity'] = df_sheet['Description'].apply(extract_capacity)
     if all(col in df_sheet.columns for col in required):
         for sku in df_sheet['SKU'].astype(str):
             sheet_lookup[sku] = name
+    all_sheets[name] = df_sheet
+
+def get_structured_similarity(target, candidate, features):
+    sim = 0
+    weight_total = 0
+    for col in features:
+        t_val = target.get(col, np.nan)
+        c_val = candidate.get(col, np.nan)
+        if pd.isnull(t_val) or pd.isnull(c_val):
+            continue
+        if isinstance(t_val, (int, float, np.number)) or str(t_val).replace('.','',1).isdigit():
+            # Numeric: use normalized difference (closer = higher sim)
+            t_val = float(t_val)
+            c_val = float(c_val)
+            diff = abs(t_val - c_val)
+            rng = max(abs(t_val), abs(c_val), 1)
+            sim_val = 1 - min(diff / rng, 1)
+            weight = 2  # Weight for numeric similarity, tune as needed
+        elif col == "Configuration":
+            # Categorical match
+            sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
+            weight = 2  # High weight for configuration match
+        else:
+            # Fallback: partial string overlap
+            sim_val = int(str(t_val).strip().lower() == str(c_val).strip().lower())
+            weight = 1
+        sim += sim_val * weight
+        weight_total += weight
+    return sim / weight_total if weight_total > 0 else 0
 
 results = []
 vectorizers = {}
 ge_tfidfs = {}
 ge_dfs = {}
+
 for sku in skus:
     sheet_name = sheet_lookup.get(sku)
     if not sheet_name:
@@ -92,7 +143,6 @@ for sku in skus:
         continue
     sheet_df = all_sheets[sheet_name]
     sheet_df.columns = [str(c).strip() for c in sheet_df.columns]
-    discard_cols = ['SKU', 'Brand', 'Model Status', 'combined_specs']
     all_features = [col for col in sheet_df.columns if col not in discard_cols]
     if 'combined_specs' not in sheet_df.columns:
         sheet_df['combined_specs'] = sheet_df[all_features].astype(str).agg(' '.join, axis=1)
@@ -132,9 +182,29 @@ for sku in skus:
             'Similarity Score': 0
         })
         continue
-    comp_tfidf = vec.transform([comp_row['combined_specs'].values[0]])
-    sims = cosine_similarity(comp_tfidf, filtered_ge_tfidf)[0]
-    if sims.max() == 0:
+    # --- Structured similarity scoring ---
+    features = [col for col in sheet_df.columns if col not in discard_cols]
+    target = comp_row.iloc[0]
+    best_score = 0
+    best_idx = -1
+    best_sku = None
+    for idx, candidate in filtered_ge.iterrows():
+        structured_sim = get_structured_similarity(target, candidate, features)
+        comp_tfidf = vec.transform([target['combined_specs']])
+        tfidf_sim = cosine_similarity(comp_tfidf, filtered_ge_tfidf[idx]).item()
+        combined_score = 0.7 * structured_sim + 0.3 * tfidf_sim
+        # Print to Streamlit for review
+        st.write(
+            f"Testing against GE SKU: {candidate['SKU']} | "
+            f"Structured Score: {structured_sim:.3f} | "
+            f"Text Score: {tfidf_sim:.3f} | "
+            f"Combined: {combined_score:.3f}"
+        )
+        if combined_score > best_score:
+            best_score = combined_score
+            best_idx = idx
+            best_sku = candidate['SKU']
+    if best_idx == -1 or not best_sku:
         results.append({
             'Entered SKU': sku,
             'Closest GE SKU': 'Not found (no similar GE model)',
@@ -142,23 +212,18 @@ for sku in skus:
             'Similarity Score': 0
         })
     else:
-        best_idx = sims.argmax()
-        best_sku = filtered_ge.iloc[best_idx]['SKU']
-        best_status = filtered_ge.iloc[best_idx]['Model Status']
-        best_score = round(sims[best_idx], 3)
+        best_status = filtered_ge.loc[best_idx, 'Model Status']
         results.append({
             'Entered SKU': sku,
             'Closest GE SKU': best_sku,
             'Matched GE Model Status': best_status,
-            'Similarity Score': best_score
+            'Similarity Score': round(best_score, 3)
         })
 
 results_df = pd.DataFrame(results)
-
 st.subheader("Matching Results")
 st.dataframe(results_df)
 
-# Option to download the results table as Excel
 if not results_df.empty:
     results_excel = to_excel(results_df)
     st.download_button("Download Matching Results to Excel", data=results_excel, file_name="matching_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
