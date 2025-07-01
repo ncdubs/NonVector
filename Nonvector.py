@@ -111,10 +111,20 @@ def get_structured_similarity(target, candidate, features):
             c_float = float(c_val)
             if not np.isfinite(t_float) or not np.isfinite(c_float):
                 raise ValueError
-            diff = abs(t_float - c_float)
-            rng = max(abs(t_float), abs(c_float), 1)
-            sim_val = 1 - min(diff / rng, 1)
-            weight = 2
+            if col.lower() == "width":
+                # Treat widths within 0.25 inch as a perfect match
+                diff = abs(t_float - c_float)
+                if diff <= 0.25:
+                    sim_val = 1
+                else:
+                    rng = max(abs(t_float), abs(c_float), 1)
+                    sim_val = 1 - min(diff / rng, 1)
+                weight = 2  # width remains double-weighted
+            else:
+                diff = abs(t_float - c_float)
+                rng = max(abs(t_float), abs(c_float), 1)
+                sim_val = 1 - min(diff / rng, 1)
+                weight = 2 if col.lower() in ["capacity (cu ft)", "capacity (btu)", "capacity (pints/day)", "capacity (lbs/day)"] else 1
         except Exception:
             if col == "Configuration":
                 sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
@@ -183,28 +193,101 @@ for sku in skus:
         })
         continue
     # --- Structured similarity scoring ---
-    features = [col for col in sheet_df.columns if col not in discard_cols]
-    target = comp_row.iloc[0]
-    best_score = 0
-    best_idx = -1
-    best_sku = None
-    for row_idx, (idx, candidate) in enumerate(filtered_ge.iterrows()):
-        structured_sim = get_structured_similarity(target, candidate, features)
-        comp_tfidf = vec.transform([target['combined_specs']])
-        tfidf_sim = cosine_similarity(comp_tfidf, filtered_ge_tfidf[row_idx]).item()
-        combined_score = 0.7 * structured_sim + 0.3 * tfidf_sim
-        # Debug output removed for speed and clarity
-        if combined_score > best_score:
-            best_score = combined_score
-            best_idx = idx
-            best_sku = candidate['SKU']
-    if best_idx == -1 or not best_sku:
-        results.append({
-            'Entered SKU': sku,
-            'Closest GE SKU': 'Not found (no similar GE model)',
-            'Matched GE Model Status': '',
-            'Similarity Score': 0
-        })
+# Use key features per category for better matching
+category_key_features = {
+    'Microwaves': [
+        'Capacity (cu ft)', 'Width', 'Configuration', 'Power Level'
+    ],
+    'Dishwashers': [
+        'Width', 'Configuration', 'Sound Level'
+    ],
+    'Refrigerators': [
+        'Capacity (cu ft)', 'Width', 'Configuration'
+    ],
+    'Laundry Centers and Combos': [
+        'Capacity (cu ft)', 'Width', 'Configuration'
+    ],
+    'Ranges': [
+        'Width', 'Cooking Type', 'Number of Burners'
+    ],
+    'Wall Ovens': [
+        'Width', 'Configuration', 'Oven Type'
+    ],
+    'Cooktops': [
+        'Width', 'Configuration', 'Number of Burners'
+    ],
+    'Freezers': [
+        'Capacity (cu ft)', 'Width', 'Configuration'
+    ],
+    'Wine & Beverage Coolers': [
+        'Width', 'Bottle Capacity'
+    ],
+    'Trash Compactors': [
+        'Width', 'Compaction Ratio'
+    ],
+    'Garbage Disposers': [
+        'Horsepower', 'Configuration'
+    ],
+    'Air Conditioners': [
+        'Capacity (BTU)', 'Width', 'Type'
+    ],
+    'Dehumidifiers': [
+        'Capacity (pints/day)', 'Width'
+    ],
+    'Dryers': [
+        'Capacity (cu ft)', 'Width', 'Configuration'
+    ],
+    'Washers': [
+        'Capacity (cu ft)', 'Width', 'Configuration'
+    ],
+    'Freestanding Icemakers': [
+        'Capacity (lbs/day)', 'Width', 'Configuration'
+    ],
+    # Add more categories and features as needed
+}
+product_category = sheet_name  # If your sheet names match categories
+features = category_key_features.get(product_category, [col for col in sheet_df.columns if col not in discard_cols])
+
+# Penalize matches missing key structured features
+missing_key_penalty = 0.2
+
+target = comp_row.iloc[0]
+best_score = 0
+best_idx = -1
+best_sku = None
+best_structured_sim = 0
+best_text_sim = 0
+for row_idx, (idx, candidate) in enumerate(filtered_ge.iterrows()):
+    structured_sim = get_structured_similarity(target, candidate, features)
+    comp_tfidf = vec.transform([target['combined_specs']])
+    tfidf_sim = cosine_similarity(comp_tfidf, filtered_ge_tfidf[row_idx]).item()
+    # Penalize matches with missing values in any key feature
+    key_missing = any(pd.isnull(candidate.get(k, None)) or pd.isnull(target.get(k, None)) for k in features)
+    penalty = missing_key_penalty if key_missing else 0
+    combined_score = (0.85 * structured_sim + 0.15 * tfidf_sim) - penalty
+    if combined_score > best_score:
+        best_score = combined_score
+        best_idx = idx
+        best_sku = candidate['SKU']
+        best_structured_sim = structured_sim
+        best_text_sim = tfidf_sim
+if best_idx == -1 or not best_sku:
+    results.append({
+        'Entered SKU': sku,
+        'Closest GE SKU': 'Not found (no similar GE model)',
+        'Matched GE Model Status': '',
+        'Similarity Score': 0
+    })
+else:
+    best_status = filtered_ge.loc[best_idx, 'Model Status']
+    results.append({
+        'Entered SKU': sku,
+        'Closest GE SKU': best_sku,
+        'Matched GE Model Status': best_status,
+        'Similarity Score': round(best_score, 3),
+        #'Structured Score': round(best_structured_sim, 3),
+        #'Text Score': round(best_text_sim, 3)
+    })
     else:
         best_status = filtered_ge.loc[best_idx, 'Model Status']
         results.append({
