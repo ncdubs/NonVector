@@ -106,22 +106,20 @@ def get_structured_similarity(target, candidate, features):
         c_val = candidate.get(col, np.nan)
         if pd.isnull(t_val) or pd.isnull(c_val):
             continue
-        if isinstance(t_val, (int, float, np.number)) or str(t_val).replace('.','',1).isdigit():
-            # Numeric: use normalized difference (closer = higher sim)
-            t_val = float(t_val)
-            c_val = float(c_val)
-            diff = abs(t_val - c_val)
-            rng = max(abs(t_val), abs(c_val), 1)
+        try:
+            t_float = float(t_val)
+            c_float = float(c_val)
+            diff = abs(t_float - c_float)
+            rng = max(abs(t_float), abs(c_float), 1)
             sim_val = 1 - min(diff / rng, 1)
-            weight = 2  # Weight for numeric similarity, tune as needed
-        elif col == "Configuration":
-            # Categorical match
-            sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
-            weight = 2  # High weight for configuration match
-        else:
-            # Fallback: partial string overlap
-            sim_val = int(str(t_val).strip().lower() == str(c_val).strip().lower())
-            weight = 1
+            weight = 2
+        except Exception:
+            if col == "Configuration":
+                sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
+                weight = 2
+            else:
+                sim_val = int(str(t_val).strip().lower() == str(c_val).strip().lower())
+                weight = 1
         sim += sim_val * weight
         weight_total += weight
     return sim / weight_total if weight_total > 0 else 0
