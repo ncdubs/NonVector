@@ -215,9 +215,13 @@ for sku in skus:
         })
 
 results_df = pd.DataFrame(results)
+# Exclude 'Matched GE Model Status' from output and download, but keep for logic/filtering
+display_cols = [col for col in results_df.columns if col != 'Matched GE Model Status']
+
 st.subheader("Matching Results")
-st.dataframe(results_df)
+st.dataframe(results_df[display_cols])
 
 if not results_df.empty:
-    results_excel = to_excel(results_df)
+    results_excel = to_excel(results_df[display_cols])
     st.download_button("Download Matching Results to Excel", data=results_excel, file_name="matching_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
