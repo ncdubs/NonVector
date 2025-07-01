@@ -109,6 +109,8 @@ def get_structured_similarity(target, candidate, features):
         try:
             t_float = float(t_val)
             c_float = float(c_val)
+            if not np.isfinite(t_float) or not np.isfinite(c_float):
+                raise ValueError
             diff = abs(t_float - c_float)
             rng = max(abs(t_float), abs(c_float), 1)
             sim_val = 1 - min(diff / rng, 1)
@@ -191,13 +193,7 @@ for sku in skus:
         comp_tfidf = vec.transform([target['combined_specs']])
         tfidf_sim = cosine_similarity(comp_tfidf, filtered_ge_tfidf[row_idx]).item()
         combined_score = 0.7 * structured_sim + 0.3 * tfidf_sim
-        # Print to Streamlit for review
-        st.write(
-            f"Testing against GE SKU: {candidate['SKU']} | "
-            f"Structured Score: {structured_sim:.3f} | "
-            f"Text Score: {tfidf_sim:.3f} | "
-            f"Combined: {combined_score:.3f}"
-        )
+        # Debug output removed for speed and clarity
         if combined_score > best_score:
             best_score = combined_score
             best_idx = idx
