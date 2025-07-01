@@ -188,10 +188,10 @@ for sku in skus:
     best_score = 0
     best_idx = -1
     best_sku = None
-    for idx, candidate in filtered_ge.iterrows():
+    for row_idx, (idx, candidate) in enumerate(filtered_ge.iterrows()):
         structured_sim = get_structured_similarity(target, candidate, features)
         comp_tfidf = vec.transform([target['combined_specs']])
-        tfidf_sim = cosine_similarity(comp_tfidf, filtered_ge_tfidf[idx]).item()
+        tfidf_sim = cosine_similarity(comp_tfidf, filtered_ge_tfidf[row_idx]).item()
         combined_score = 0.7 * structured_sim + 0.3 * tfidf_sim
         # Print to Streamlit for review
         st.write(
