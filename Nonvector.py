@@ -288,7 +288,15 @@ else:
         #'Structured Score': round(best_structured_sim, 3),
         #'Text Score': round(best_text_sim, 3)
     })
-  
+    else:
+        best_status = filtered_ge.loc[best_idx, 'Model Status']
+        results.append({
+            'Entered SKU': sku,
+            'Closest GE SKU': best_sku,
+            'Matched GE Model Status': best_status,
+            'Similarity Score': round(best_score, 3)
+        })
+
 results_df = pd.DataFrame(results)
 # Exclude 'Matched GE Model Status' from output and download, but keep for logic/filtering
 display_cols = [col for col in results_df.columns if col != 'Matched GE Model Status']
@@ -299,4 +307,3 @@ st.dataframe(results_df[display_cols])
 if not results_df.empty:
     results_excel = to_excel(results_df[display_cols])
     st.download_button("Download Matching Results to Excel", data=results_excel, file_name="matching_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
