@@ -97,10 +97,12 @@ def extract_width(description):
 def extract_capacity(description):
     if pd.isnull(description):
         return np.nan
-    match = re.search(r'(\d+(?:\.\d+)?)(\s*cu\.?\s*ft|'"'(?!''))', str(description).lower())
+    # Handles: 1.9 cu ft, 1.9cu.ft, 1.9cuft, 1.9 "cu ft", etc
+    match = re.search(r'(\d+(?:\.\d+)?)\s*(cu\.?\s*ft|cuft|cubic\s*feet|cubic\s*ft)', str(description).lower())
     if match:
         return float(match.group(1))
     return np.nan
+
   
 def extract_wattage(description):
     if pd.isnull(description):
