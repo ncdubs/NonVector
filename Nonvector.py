@@ -72,16 +72,29 @@ required = ['SKU', 'Brand', 'Model Status', 'Configuration']
 def extract_width(description):
     if pd.isnull(description):
         return np.nan
-    match = re.search(r'(\d{2,3})(\s?("|in|inches|inch|-in|-IN|-inch|-INCH|\'\'))', str(description))
+    # Handles: 30", 30 in, 30-in, 30inch, 30inches, 30 - inch, etc.
+    match = re.search(
+        r'(\d{2,3}(?:\.\d+)?)(?:\s*[-]?)\s*(?:"|”|in\.?|inch(?:es)?|\-in\b)',
+        str(description).lower()
+    )
     if match:
         return float(match.group(1))
     return np.nan
+
 
 def extract_capacity(description):
     if pd.isnull(description):
         return np.nan
     # Matches: 1.1', 1.1 cu ft, 1.1 cu. ft., etc. (as cubic feet)
     match = re.search(r'(\d+(?:\.\d+)?)(\s*cu\.?\s*ft|\'(?!\'))', str(description).lower())
+    if match:
+        return float(match.group(1))
+    return np.nan
+  
+def extract_wattage(description):
+    if pd.isnull(description):
+        return np.nan
+    match = re.search(r'(\d{3,4})\s*(w|watt)', str(description).lower())
     if match:
         return float(match.group(1))
     return np.nan
@@ -92,10 +105,27 @@ for name, df_sheet in all_sheets.items():
     if 'Description' in df_sheet.columns:
         df_sheet['ExtractedWidth'] = df_sheet['Description'].apply(extract_width)
         df_sheet['ExtractedCapacity'] = df_sheet['Description'].apply(extract_capacity)
+        df_sheet['ExtractedWattage'] = df_sheet['Description'].apply(extract_wattage)
+        # Fill missing or blank Width with ExtractedWidth
+        if 'Width' in df_sheet.columns:
+            df_sheet['Width'] = df_sheet['Width'].replace('', np.nan)
+            df_sheet['Width'] = df_sheet['Width'].fillna(df_sheet['ExtractedWidth'])
+        else:
+            df_sheet['Width'] = df_sheet['ExtractedWidth']
+        # Use wattage from description if found, else fallback to Power Level column
+        if 'Power Level' in df_sheet.columns:
+            df_sheet['Power Level'] = df_sheet.apply(
+                lambda row: row['ExtractedWattage'] if not pd.isnull(row['ExtractedWattage']) else row['Power Level'],
+                axis=1
+            )
+        else:
+            df_sheet['Power Level'] = df_sheet['ExtractedWattage']
+
     if all(col in df_sheet.columns for col in required):
         for sku in df_sheet['SKU'].astype(str):
             sheet_lookup[sku] = name
     all_sheets[name] = df_sheet
+
 
 def get_structured_similarity(target, candidate, features):
     sim = 0
@@ -116,11 +146,20 @@ def get_structured_similarity(target, candidate, features):
                 sim_val = 1 - min(diff / rng, 1)
                 weight = 2
             else:
-                diff = abs(t_float - c_float)
-                rng = max(abs(t_float), abs(c_float), 1)
-                sim_val = 1 - min(diff / rng, 1)
-                # Up-weight any key feature for the category
-                weight = 2 if col in features else 1
+    diff = abs(t_float - c_float)
+    rng = max(abs(t_float), abs(c_float), 1)
+    # Special handling for Power Level (Wattage)
+    if col.lower() == "power level":
+        if diff <= 25:
+            sim_val = 1
+        elif diff <= 100:
+            sim_val = 0.95
+        else:
+            sim_val = 1 - min(diff / rng, 1)
+    else:
+        sim_val = 1 - min(diff / rng, 1)
+    # Up-weight any key feature for the category
+    weight = 2 if col in features else 1
         except Exception:
             if col == "Configuration":
                 sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
