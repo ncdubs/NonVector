@@ -69,13 +69,25 @@ all_sheets = pd.read_excel(appliance_file, sheet_name=None)
 sheet_lookup = {}
 required = ['SKU', 'Brand', 'Model Status', 'Configuration']
 
+# PATCHED extract_width
+# Handles fractions, decimals, various inch formats
+
 def extract_width(description):
     if pd.isnull(description):
         return np.nan
-    # Handles: 30", 30 in, 30-in, 30inch, 30inches, 30 - inch, etc.
+    desc = str(description).lower()
+    # 29 3/4, 30 1/2, 29.75, etc.
+    frac_match = re.search(r'(\d{2,3})\s+(\d{1,2})/(\d{1,2})', desc)
+    if frac_match:
+        whole = float(frac_match.group(1))
+        num = float(frac_match.group(2))
+        denom = float(frac_match.group(3))
+        value = whole + num / denom
+        return value
+    # 30", 30 in, 30-in, 30inch, etc. (also fallback for decimals)
     match = re.search(
         r'(\d{2,3}(?:\.\d+)?)(?:\s*[-]?)\s*(?:"|”|in\.?|inch(?:es)?|\-in\b)',
-        str(description).lower()
+        desc
     )
     if match:
         return float(match.group(1))
@@ -85,8 +97,7 @@ def extract_width(description):
 def extract_capacity(description):
     if pd.isnull(description):
         return np.nan
-    # Matches: 1.1', 1.1 cu ft, 1.1 cu. ft., etc. (as cubic feet)
-    match = re.search(r'(\d+(?:\.\d+)?)(\s*cu\.?\s*ft|\'(?!\'))', str(description).lower())
+    match = re.search(r'(\d+(?:\.\d+)?)(\s*cu\.?\s*ft|'"'(?!''))', str(description).lower())
     if match:
         return float(match.group(1))
     return np.nan
@@ -98,6 +109,24 @@ def extract_wattage(description):
     if match:
         return float(match.group(1))
     return np.nan
+
+def parse_power_range(val):
+    if pd.isnull(val):
+        return None, None
+    # Try for range: 1000-1200
+    match = re.match(r"(\d{3,4})\s*-\s*(\d{3,4})", str(val))
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    # Try for '1000-1200 Range' etc
+    match = re.match(r"(\d{3,4})\s*-\s*(\d{3,4})\s*range", str(val).lower())
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    # Single number: 1000, '1100W'
+    match = re.match(r"(\d{3,4})", str(val))
+    if match:
+        n = float(match.group(1))
+        return n, n
+    return None, None
 
 discard_cols = ['SKU', 'Brand', 'Model Status', 'combined_specs']
 for name, df_sheet in all_sheets.items():
@@ -136,29 +165,49 @@ def get_structured_similarity(target, candidate, features):
         if pd.isnull(t_val) or pd.isnull(c_val):
             continue
         try:
-            t_float = float(t_val)
-            c_float = float(c_val)
-            if not np.isfinite(t_float) or not np.isfinite(c_float):
-                raise ValueError
-            if col.lower() == "width":
+            if col.lower() == "power level":
+                t_min, t_max = parse_power_range(t_val)
+                c_min, c_max = parse_power_range(c_val)
+                if None not in (t_min, t_max, c_min, c_max):
+                    # Ranges overlap
+                    overlap = not (c_max < t_min or c_min > t_max)
+                    if overlap:
+                        sim_val = 1
+                    else:
+                        diff = min(abs(t_min - c_max), abs(t_max - c_min))
+                        rng = max(t_max, c_max, 1)
+                        sim_val = 1 - min(diff / rng, 1)
+                    weight = 2 if col in features else 1
+                else:
+                    # Fallback to number comparison if possible
+                    try:
+                        t_float = float(t_val)
+                        c_float = float(c_val)
+                        diff = abs(t_float - c_float)
+                        if diff <= 25:
+                            sim_val = 1
+                        elif diff <= 100:
+                            sim_val = 0.95
+                        else:
+                            rng = max(abs(t_float), abs(c_float), 1)
+                            sim_val = 1 - min(diff / rng, 1)
+                        weight = 2 if col in features else 1
+                    except Exception:
+                        sim_val = int(str(t_val).strip().lower() == str(c_val).strip().lower())
+                        weight = 2 if col in features else 1
+            elif col.lower() == "width":
+                t_float = float(t_val)
+                c_float = float(c_val)
                 diff = abs(t_float - c_float)
                 rng = max(abs(t_float), abs(c_float), 1)
                 sim_val = 1 - min(diff / rng, 1)
                 weight = 2
             else:
+                t_float = float(t_val)
+                c_float = float(c_val)
                 diff = abs(t_float - c_float)
                 rng = max(abs(t_float), abs(c_float), 1)
-                # Special handling for Power Level (Wattage)
-                if col.lower() == "power level":
-                    if diff <= 25:
-                        sim_val = 1
-                    elif diff <= 100:
-                        sim_val = 0.95
-                    else:
-                        sim_val = 1 - min(diff / rng, 1)
-                else:
-                    sim_val = 1 - min(diff / rng, 1)
-                # Up-weight any key feature for the category
+                sim_val = 1 - min(diff / rng, 1)
                 weight = 2 if col in features else 1
         except Exception:
             if col == "Configuration":
@@ -332,10 +381,11 @@ for sku in skus:
             'Closest GE SKU': best_sku,
             'Matched GE Model Status': best_status,
             'Similarity Score': round(best_score, 3),
-            #'Structured Score': round(best_structured_sim, 3),
-            #'Text Score': round(best_text_sim, 3)
+            #'Structured Score':            # Uncomment for extra debug
+            # 'Structured Score': round(best_structured_sim, 3),
+            # 'TFIDF Score': round(best_text_sim, 3)
         })
-  
+
 results_df = pd.DataFrame(results)
 # Exclude 'Matched GE Model Status' from output and download, but keep for logic/filtering
 display_cols = [col for col in results_df.columns if col != 'Matched GE Model Status']
@@ -345,4 +395,10 @@ st.dataframe(results_df[display_cols])
 
 if not results_df.empty:
     results_excel = to_excel(results_df[display_cols])
-    st.download_button("Download Matching Results to Excel", data=results_excel, file_name="matching_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button(
+        "Download Matching Results to Excel",
+        data=results_excel,
+        file_name="matching_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
