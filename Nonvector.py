@@ -352,7 +352,6 @@ for sku in skus:
         key_missing = any(pd.isnull(candidate.get(k, None)) or pd.isnull(target.get(k, None)) for k in features)
         penalty = missing_key_penalty if key_missing else 0
         combined_score = (0.92 * structured_sim + 0.08 * tfidf_sim) - penalty
-            })
 
         if combined_score > best_score:
             best_score = combined_score
