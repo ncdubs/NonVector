@@ -146,20 +146,20 @@ def get_structured_similarity(target, candidate, features):
                 sim_val = 1 - min(diff / rng, 1)
                 weight = 2
             else:
-    diff = abs(t_float - c_float)
-    rng = max(abs(t_float), abs(c_float), 1)
-    # Special handling for Power Level (Wattage)
-    if col.lower() == "power level":
-        if diff <= 25:
-            sim_val = 1
-        elif diff <= 100:
-            sim_val = 0.95
-        else:
-            sim_val = 1 - min(diff / rng, 1)
-    else:
-        sim_val = 1 - min(diff / rng, 1)
-    # Up-weight any key feature for the category
-    weight = 2 if col in features else 1
+                diff = abs(t_float - c_float)
+                rng = max(abs(t_float), abs(c_float), 1)
+                # Special handling for Power Level (Wattage)
+                if col.lower() == "power level":
+                    if diff <= 25:
+                        sim_val = 1
+                    elif diff <= 100:
+                        sim_val = 0.95
+                    else:
+                        sim_val = 1 - min(diff / rng, 1)
+                else:
+                    sim_val = 1 - min(diff / rng, 1)
+                # Up-weight any key feature for the category
+                weight = 2 if col in features else 1
         except Exception:
             if col == "Configuration":
                 sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
@@ -170,6 +170,7 @@ def get_structured_similarity(target, candidate, features):
         sim += sim_val * weight
         weight_total += weight
     return sim / weight_total if weight_total > 0 else 0
+
 
 results = []
 vectorizers = {}
@@ -334,3 +335,4 @@ st.dataframe(results_df[display_cols])
 if not results_df.empty:
     results_excel = to_excel(results_df[display_cols])
     st.download_button("Download Matching Results to Excel", data=results_excel, file_name="matching_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
