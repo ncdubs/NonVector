@@ -112,24 +112,22 @@ def get_structured_similarity(target, candidate, features):
                 raise ValueError
             if col.lower() == "width":
                 diff = abs(t_float - c_float)
-                if diff <= 1:   # PATCHED from 0.25 to 1 inch
-                    sim_val = 1
-                else:
-                    rng = max(abs(t_float), abs(c_float), 1)
-                    sim_val = 1 - min(diff / rng, 1)
-                weight = 2  # width remains double-weighted
+                rng = max(abs(t_float), abs(c_float), 1)
+                sim_val = 1 - min(diff / rng, 1)
+                weight = 2
             else:
                 diff = abs(t_float - c_float)
                 rng = max(abs(t_float), abs(c_float), 1)
                 sim_val = 1 - min(diff / rng, 1)
-                weight = 2 if col.lower() in ["capacity (cu ft)", "capacity (btu)", "capacity (pints/day)", "capacity (lbs/day)"] else 1
+                # Up-weight any key feature for the category
+                weight = 2 if col in features else 1
         except Exception:
             if col == "Configuration":
                 sim_val = 1 if str(t_val).lower() == str(c_val).lower() else 0
-                weight = 2
+                weight = 2 if col in features else 1
             else:
                 sim_val = int(str(t_val).strip().lower() == str(c_val).strip().lower())
-                weight = 1
+                weight = 2 if col in features else 1
         sim += sim_val * weight
         weight_total += weight
     return sim / weight_total if weight_total > 0 else 0
