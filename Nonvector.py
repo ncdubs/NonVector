@@ -352,15 +352,6 @@ for sku in skus:
         key_missing = any(pd.isnull(candidate.get(k, None)) or pd.isnull(target.get(k, None)) for k in features)
         penalty = missing_key_penalty if key_missing else 0
         combined_score = (0.92 * structured_sim + 0.08 * tfidf_sim) - penalty
-              # ---- DEBUG OUTPUT FOR THIS MATCH ----
-        if sku == "GMOS1964AD":
-            st.write(f"DEBUG: {sku} vs {candidate['SKU']}")
-            st.write({
-                "Structured Score": structured_sim,
-                "TFIDF Score": tfidf_sim,
-                "Penalty": penalty,
-                "Combined Score": combined_score,
-                "Key Features": {k: (target.get(k), candidate.get(k)) for k in features}
             })
 
         if combined_score > best_score:
@@ -403,4 +394,3 @@ if not results_df.empty:
         file_name="matching_results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
